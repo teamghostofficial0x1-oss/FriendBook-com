@@ -11,19 +11,12 @@ if (!isset($_SESSION['username']) || $_SESSION['username'] !== 'adminRubel') {
 
 $msg = '';
 
-// 💥 [AUTOMATIC INFRASTRUCTURE FIX]: কলাম না থাকলে স্বয়ংক্রিয়ভাবে তৈরি করার লজিক
+// Automatic Table Check and Setup
 try {
     $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified INT DEFAULT 0;");
-} catch (PDOException $e) {
-    // যদি ডাটাবেজ ড্রাইভার IF NOT EXISTS সাপোর্ট না করে (যেমন পুরানো PGSQL সংস্করণ)
-    try {
-        $pdo->exec("ALTER TABLE users ADD COLUMN is_verified INT DEFAULT 0;");
-    } catch (Exception $ex) {
-        // কলাম ইতিমধ্যে থাকলে এরর ইগনোর করবে
-    }
-}
+} catch (PDOException $e) {}
 
-// 🎯 ভেরিফিকেশন স্টেট চেঞ্জার অ্যাকশন টগল
+// 🎯 VERIFICATION TOGGLE CONTROLLER
 if (isset($_GET['action']) && $_GET['action'] === 'toggle_verify' && isset($_GET['username'])) {
     $target_user = trim($_GET['username']);
     
@@ -31,22 +24,21 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_verify' && isset($_GET
     $status_stmt->execute([$target_user]);
     $current_status = $status_stmt->fetchColumn();
 
-    // ০ থাকলে ১ করবে, ১ থাকলে ০ করবে (টগল লজিক)
     $new_status = ($current_status == 1) ? 0 : 1;
     
     $update_stmt = $pdo->prepare("UPDATE users SET is_verified = ? WHERE username = ?");
     $update_stmt->execute([$new_status, $target_user]);
     
-    $msg = "User @{$target_user} Meta-Verification status updated successfully!";
+    $msg = "Success: @{$target_user} Verification status updated to version [{$new_status}]";
 }
 
-// ইউজার ডিলিট লজিক
+// User Purge Action
 if (isset($_GET['action']) && $_GET['action'] === 'delete_user' && isset($_GET['username'])) {
     $target_del = trim($_GET['username']);
     if ($target_del !== 'adminRubel') {
         $pdo->prepare("DELETE FROM users WHERE username = ?")->execute([$target_del]);
         $pdo->prepare("DELETE FROM posts WHERE username = ?")->execute([$target_del]);
-        $msg = "User @{$target_del} purged successfully!";
+        $msg = "User @{$target_del} successfully wiped.";
     }
 }
 
@@ -57,7 +49,7 @@ $users_list = $pdo->query("SELECT id, username, email, is_verified FROM users OR
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>DBMS Control Center - Verification Framework</title>
+    <title>DBMS Server Matrix</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
@@ -65,23 +57,23 @@ $users_list = $pdo->query("SELECT id, username, email, is_verified FROM users OR
 
     <div class="max-w-6xl mx-auto space-y-6">
         <div class="flex justify-between items-center bg-[#18191a] p-4 rounded-xl border border-[#2f3031]">
-            <h1 class="font-black text-sm uppercase tracking-wider text-white"><i class="fas fa-database text-blue-500 mr-2"></i>Core DBMS Coreframe</h1>
-            <a href="feed.php" class="text-xs bg-[#242526] hover:bg-[#3a3b3c] px-3 py-1.5 rounded-lg font-bold">Back to Feed</a>
+            <h1 class="font-black text-xs uppercase tracking-wider text-white"><i class="fas fa-server text-blue-500 mr-2"></i>DBMS CORE NETWORK</h1>
+            <a href="feed.php" class="text-xs bg-blue-600 px-4 py-2 rounded-lg font-bold hover:bg-blue-700">Back to Feed Portal</a>
         </div>
 
         <?php if($msg): ?>
-            <div class="p-3 text-xs font-mono rounded-lg bg-green-500/10 text-green-400 border border-green-500/20">[SYS LOG]: <?php echo $msg; ?></div>
+            <div class="p-3 text-xs font-mono rounded-lg bg-green-500/10 text-green-400 border border-green-500/20">[SYS REFRESH]: <?php echo $msg; ?></div>
         <?php endif; ?>
 
         <div class="bg-[#18191a] rounded-xl border border-[#2f3031] overflow-hidden">
-            <div class="p-4 bg-[#242526] border-b border-[#2f3031] font-bold text-xs uppercase text-gray-300">User Infrastructure Registry (Total: <?php echo $total_users; ?>)</div>
+            <div class="p-4 bg-[#242526] border-b border-[#2f3031] font-bold text-xs text-gray-300 uppercase">User Index Registry (Active Accounts: <?php echo $total_users; ?>)</div>
             <table class="w-full text-left text-xs">
                 <thead>
                     <tr class="bg-[#1c1d1e] text-gray-400 border-b border-[#2f3031]">
                         <th class="p-3">Username</th>
-                        <th class="p-3">Email</th>
-                        <th class="p-3">Status Badge</th>
-                        <th class="p-3 text-center">Actions</th>
+                        <th class="p-3">Email Address</th>
+                        <th class="p-3">Meta-Verification Token</th>
+                        <th class="p-3 text-center">Action Console</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-[#2f3031]">
@@ -91,19 +83,19 @@ $users_list = $pdo->query("SELECT id, username, email, is_verified FROM users OR
                             <td class="p-3 text-gray-400"><?php echo $u['email']; ?></td>
                             <td class="p-3">
                                 <?php if($u['username'] === 'adminRubel'): ?>
-                                    <span class="text-red-400 font-mono text-[10px] uppercase bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20">Root Protected</span>
+                                    <span class="text-red-400 font-mono text-[10px] uppercase bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20"><i class="fas fa-crown mr-1"></i>System Admin</span>
                                 <?php elseif($u['is_verified'] == 1): ?>
-                                    <span class="text-blue-400 font-mono text-[10px] uppercase bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20"><i class="fas fa-check-circle mr-1"></i>Official Active</span>
+                                    <span class="text-blue-400 font-mono text-[10px] uppercase bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20"><i class="fas fa-check-circle mr-1"></i>Verified Member</span>
                                 <?php else: ?>
-                                    <span class="text-gray-500 font-mono text-[10px] uppercase bg-[#242526] px-2 py-0.5 rounded">Standard Account</span>
+                                    <span class="text-gray-500 font-mono text-[10px] bg-[#242526] px-2 py-0.5 rounded">Unverified Guest</span>
                                 <?php endif; ?>
                             </td>
                             <td class="p-3 text-center flex justify-center gap-2">
                                 <?php if($u['username'] !== 'adminRubel'): ?>
-                                    <a href="dbms-system-management.php?action=toggle_verify&username=<?php echo $u['username']; ?>" class="text-xs font-bold px-2 py-1 rounded <?php echo ($u['is_verified'] == 1) ? 'bg-amber-600/20 text-amber-400 border border-amber-500/20' : 'bg-blue-600/20 text-blue-400 border border-blue-500/20'; ?>">
-                                        <?php echo ($u['is_verified'] == 1) ? 'Remove Badge' : 'Verify Member'; ?>
+                                    <a href="dbms-system-management.php?action=toggle_verify&username=<?php echo $u['username']; ?>" class="text-[11px] font-black px-3 py-1 rounded-md transition-all <?php echo ($u['is_verified'] == 1) ? 'bg-amber-600 text-white hover:bg-amber-700' : 'bg-blue-600 text-white hover:bg-blue-700'; ?>">
+                                        <?php echo ($u['is_verified'] == 1) ? '<i class="fas fa-user-minus mr-1"></i> Remove Verification' : '<i class="fas fa-user-check mr-1"></i> Verify Member'; ?>
                                     </a>
-                                    <a href="dbms-system-management.php?action=delete_user&username=<?php echo $u['username']; ?>" onclick="return confirm('Purge user?')" class="text-red-400 hover:bg-red-500/10 px-2 py-1 rounded border border-red-500/10 font-bold">Wipe</a>
+                                    <a href="dbms-system-management.php?action=delete_user&username=<?php echo $u['username']; ?>" onclick="return confirm('Purge account registry data permanently?')" class="text-red-400 hover:bg-red-500/20 px-2 py-1 rounded font-bold border border-red-500/10">Purge</a>
                                 <?php endif; ?>
                             </td>
                         </tr>
