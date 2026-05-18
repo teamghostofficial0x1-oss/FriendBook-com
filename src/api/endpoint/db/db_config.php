@@ -2,21 +2,22 @@
 require_once __DIR__ . '/db.php';
 
 try {
-    // ১. ইউজার টেবিল
-    $pdo->exec("CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
-        email VARCHAR(100) UNIQUE NOT NULL,
-        bio TEXT DEFAULT 'Coding is life. Secure everything!',
-        profile_pic VARCHAR(255) DEFAULT 'default.png',
-        reset_token VARCHAR(64) DEFAULT NULL,
-        token_expires TIMESTAMP DEFAULT NULL,
-        remember_token VARCHAR(64) DEFAULT NULL,
-        remember_expires TIMESTAMP DEFAULT NULL,
-        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )");
+    // ১. ইউজার টেবিল (is_verified কলামসহ আপডেট করা হলো)
+$pdo->exec("CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    bio TEXT DEFAULT 'Coding is life. Secure everything!',
+    profile_pic VARCHAR(255) DEFAULT 'default.png',
+    is_verified INT DEFAULT 0, -- 🎯 ০ = নরমাল ইউজার, ১ = ভেরিফাইড/অফিসিয়াল মেম্বার
+    reset_token VARCHAR(64) DEFAULT NULL,
+    token_expires TIMESTAMP DEFAULT NULL,
+    remember_token VARCHAR(64) DEFAULT NULL,
+    remember_expires TIMESTAMP DEFAULT NULL,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)");
     
     // ২. নিউজফিড ও রিলস/ভিডিও টেবিল (কলামগুলো ১০০% ফিক্সড)
     $pdo->exec("CREATE TABLE IF NOT EXISTS posts (
