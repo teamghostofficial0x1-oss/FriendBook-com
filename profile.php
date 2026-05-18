@@ -107,6 +107,16 @@ $my_posts = $my_posts_stmt->fetchAll(PDO::FETCH_ASSOC);
             <?php if($current_user === 'adminRubel'): ?>
                 <a href="dbms-system-management.php" class="bg-red-600 px-3 py-2 rounded-xl text-xs font-bold text-white"><i class="fas fa-screwdriver-wrench mr-1"></i>DBMS</a>
             <?php endif; ?>
+<nav class="sticky top-0 z-50 bg-[#242526] border-b border-[#393a3b] h-14 flex items-center justify-between px-4 shadow-md">
+        <a href="feed.php" class="text-[#1877f2] text-3xl font-black tracking-tighter">FriendBook</a>
+        <div class="flex items-center gap-3">
+            <a href="feed.php" class="bg-[#3a3b3c] hover:bg-[#4e4f50] px-4 py-2 rounded-xl text-sm font-semibold transition-all"><i class="fas fa-home mr-2"></i>Feed</a>
+            <?php if($current_user === 'adminRubel'): ?>
+                <a href="dbms-system-management.php" class="bg-blue-600 px-3 py-2 rounded-xl text-xs font-bold text-white"><i class="fas fa-screwdriver-wrench mr-1"></i>DBMS</a>
+            <?php endif; ?>
+            <a href="index.php?action=logout" class="bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white px-3 py-2 rounded-xl text-xs font-bold transition-all"><i class="fas fa-sign-out-alt mr-1"></i>Logout</a>
+        </div>
+    </nav>
         </div>
     </nav>
 
