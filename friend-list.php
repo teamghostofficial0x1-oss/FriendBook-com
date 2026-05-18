@@ -36,11 +36,10 @@ if (isset($_GET['action']) && isset($_GET['user'])) {
     }
 }
 
-// --- ২. সার্চ বা ফিল্টার লজিক (ভুল কলাম হ্যান্ডলিং ফিক্সড) ---
+// --- ২. সার্চ বা ফিল্টার লজিক ---
 $search = $_GET['search'] ?? '';
 try {
     if (!empty($search)) {
-        // 🛠️ এখানে 'last_seen' কলামটি যদি ডাটাবেজে না থাকে, তাই আমরা সেটি কুয়েরি থেকে বাদ দিয়েছি বা ডিফল্ট কারেন্ট টাইম পাস করছি
         $stmt = $pdo->prepare("SELECT username, profile_pic, bio FROM users WHERE username LIKE ? AND username != ? LIMIT 20");
         $stmt->execute(["%$search%", $current_user]);
     } else {
@@ -49,7 +48,6 @@ try {
     }
     $all_users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
-    // সেফটি ফলব্যাক: যদি তাও এরর দেয় তবে একদম মিনিমাল ডাটা তুলে আনা
     $stmt = $pdo->prepare("SELECT username FROM users WHERE username != ?");
     $stmt->execute([$current_user]);
     $all_users = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -60,7 +58,7 @@ $req_stmt = $pdo->prepare("SELECT sender FROM friends WHERE receiver = ? AND sta
 $req_stmt->execute([$current_user]);
 $pending_requests = $req_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-// --- ৪. অলরেডি ফ্রেন্ড কারা আছে তাদের লিস্ট (ডুপ্লিকেট রিকোয়েস্ট আটকানোর জন্য) ---
+// --- ৪. অলরেডি ফ্রেন্ড কারা আছে তাদের লিস্ট ---
 $frnd_stmt = $pdo->prepare("SELECT CASE WHEN sender = ? THEN receiver ELSE sender END FROM friends WHERE (sender = ? OR receiver = ?) AND status = 'accepted'");
 $frnd_stmt->execute([$current_user, $current_user, $current_user]);
 $my_friends = $frnd_stmt->fetchAll(PDO::FETCH_COLUMN);
@@ -99,7 +97,7 @@ $sent_requests = $sent_stmt->fetchAll(PDO::FETCH_COLUMN);
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <?php foreach($pending_requests as $sender_name): ?>
                         <div class="p-3 bg-[#18191a] rounded-xl border border-[#2f3031] flex justify-between items-center">
-                            <span class="font-bold text-sm">@<?php echo $sender_name; ?></span>
+                            <a href="profile.php?user=<?php echo $sender_name; ?>" class="font-bold text-sm hover:underline hover:text-[#1877f2] cursor-pointer">@<?php echo $sender_name; ?></a>
                             <div class="flex gap-2">
                                 <a href="friend-list.php?action=accept&user=<?php echo $sender_name; ?>" class="bg-green-600 hover:bg-green-500 text-white text-xs px-3 py-1.5 rounded-lg font-bold">Confirm</a>
                                 <a href="friend-list.php?action=reject&user=<?php echo $sender_name; ?>" class="bg-neutral-700 hover:bg-neutral-600 text-gray-300 text-xs px-3 py-1.5 rounded-lg font-bold">Delete</a>
@@ -129,13 +127,14 @@ $sent_requests = $sent_stmt->fetchAll(PDO::FETCH_COLUMN);
                         $u_bio = $user['bio'] ?? 'Hello World! Connected via FriendBook.';
                     ?>
                         <div class="p-4 bg-[#18191a] rounded-xl border border-[#2f3031] flex items-center justify-between gap-3">
-                            <div class="flex items-center gap-3">
-                                <img src="<?php echo $u_pic; ?>" class="w-10 h-10 rounded-full object-cover bg-neutral-800">
+                            
+                            <a href="profile.php?user=<?php echo $u_name; ?>" class="flex items-center gap-3 hover:opacity-80 cursor-pointer group">
+                                <img src="<?php echo $u_pic; ?>" class="w-10 h-10 rounded-full object-cover bg-neutral-800 border border-transparent group-hover:border-[#1877f2]">
                                 <div>
-                                    <h5 class="font-bold text-sm text-white">@<?php echo $u_name; ?></h5>
+                                    <h5 class="font-bold text-sm text-white group-hover:underline group-hover:text-[#1877f2]">@<?php echo $u_name; ?></h5>
                                     <p class="text-[11px] text-gray-400 line-clamp-1 max-w-[180px]"><?php echo htmlspecialchars($u_bio); ?></p>
                                 </div>
-                            </div>
+                            </a>
 
                             <div>
                                 <?php if(in_array($u_name, $my_friends)): ?>
