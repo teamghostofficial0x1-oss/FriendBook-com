@@ -18,6 +18,27 @@ try {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
 
+    // ২. নিউজফিড পোস্ট টেবিল (ছবি সংরক্ষণের কলামসহ)
+$pdo->exec("CREATE TABLE IF NOT EXISTS posts (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) NOT NULL,
+    content TEXT NOT NULL,
+    post_pic VARCHAR(255) DEFAULT NULL, -- 📸 পোস্টের ছবির জন্য নতুন কলাম
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)");
+
+// ৩. চ্যাট মেসেঞ্জার টেবিল (নির্দিষ্ট রিসিভার কলামসহ)
+$pdo->exec("CREATE TABLE IF NOT EXISTS messages (
+    id SERIAL PRIMARY KEY, 
+    sender VARCHAR(50) NOT NULL, 
+    receiver VARCHAR(50) NOT NULL, -- 👥 নির্দিষ্ট ফ্রেন্ডের কাছে মেসেজ যাওয়ার জন্য কলাম
+    message TEXT NOT NULL, 
+    file_path VARCHAR(255) DEFAULT NULL,
+    file_type VARCHAR(50) DEFAULT NULL,
+    call_signal TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)");
+
     // 👮 👑 ৬. অটোমেটিক সুপার অ্যাডমিন (`adminRubel`) ইনজেকশন লজিক
     $admin_username = 'adminRubel';
     $admin_email = 'admin@friendbook.com';
