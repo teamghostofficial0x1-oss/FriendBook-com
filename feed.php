@@ -34,7 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['ac
     exit;
 }
 
-// --- ২. ফিক্সড ফেসবুক অ্যালগরিদম (ইনবক্স বা ফ্রেন্ডলিস্ট ফাঁকা থাকলেও ক্র্যাশ করবে না) ---
+// --- ২. ফেসবুক অ্যালগরিদম ভিত্তিক স্মার্ট ফিড লোডার ---
 if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
     header('Content-Type: application/json');
     $filter_type = $_GET['type'] ?? 'all'; 
@@ -44,7 +44,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
     $frnd_stmt->execute([$current_user, $current_user, $current_user]);
     $friends = $frnd_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-    // SQL ইনজেকশন মুক্ত এবং সেফ ফ্রেন্ডলিস্ট হ্যান্ডলিং
     if (!empty($friends)) {
         $in_clause = implode(',', array_fill(0, count($friends), '?'));
         $execute_params = $friends;
@@ -71,7 +70,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
     $stmt->execute($execute_params);
     $posts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // রিচ কাউন্ট ও লাইক-কমেন্ট লাইভ সিঙ্ক
     $final_posts = [];
     foreach ($posts as $post) {
         $pdo->prepare("UPDATE posts SET reach_count = reach_count + 1 WHERE id = ?")->execute([$post['id']]);
@@ -82,8 +80,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
         $my_l = $pdo->prepare("SELECT COUNT(*) FROM likes WHERE post_id = ? AND username = ?"); $my_l->execute([$post['id'], $current_user]);
         $post['liked_by_me'] = $my_l->fetchColumn() > 0;
 
-        $post['comments_count'] = 0; // আপাতত ডিফল্ট ০ রাখা হলো
-
+        $post['comments_count'] = 0; 
         $final_posts[] = $post;
     }
     echo json_encode($final_posts);
@@ -126,7 +123,6 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
             <a href="friend-list.php" class="w-10 h-10 bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full flex items-center justify-center text-white" title="Find Friends"><i class="fas fa-user-plus"></i></a>
             <a href="chat.php" class="w-10 h-10 bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full flex items-center justify-center text-white" title="Messenger"><i class="fab fa-facebook-messenger"></i></a>
             <a href="profile.php" class="w-10 h-10 rounded-full overflow-hidden border-2 border-[#1877f2] block" title="My Profile"><img src="<?php echo $user_pic; ?>" class="w-full h-full object-cover"></a>
-            
             <a href="index.php?action=logout" class="bg-red-600/10 hover:bg-red-600 text-red-400 hover:text-white px-3 py-1.5 rounded-xl text-xs font-black transition-all border border-red-500/20"><i class="fas fa-sign-out-alt mr-1"></i>Logout</a>
         </div>
     </nav>
@@ -224,15 +220,16 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
 
                         let counterAnalytics = p.post_type === 'reel' ? `<span class="text-xs text-gray-400 font-mono"><i class="fas fa-eye mr-1"></i>\${p.views_count} views</span>` : '';
 
+                        // 🔗 এখানে ইউজারের নামের ওপর ক্লিক করলে তার ডাইনামিক প্রোফাইলে নিয়ে যাবে
                         card.innerHTML = `
                             <div class="flex items-center justify-between">
-                                <div class="flex items-center gap-2">
+                                <a href="profile.php?user=\${p.username}" class="flex items-center gap-2 hover:underline cursor-pointer">
                                     <div class="w-8 h-8 bg-neutral-700 text-white flex items-center justify-center rounded-full font-bold text-xs uppercase">\${p.username.substring(0,2)}</div>
                                     <div>
                                         <h6 class="font-black text-xs flex items-center">@\${p.username} \${adminBadge}</h6>
                                         <span class="text-[9px] text-gray-500">\${p.created_at}</span>
                                     </div>
-                                </div>
+                                </a>
                                 <div class="text-[10px] text-gray-500 font-mono flex gap-2">
                                     <span><i class="fas fa-chart-line mr-1"></i>\${p.reach_count} Reach</span>
                                     \${counterAnalytics}
