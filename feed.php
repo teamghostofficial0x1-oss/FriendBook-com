@@ -6,24 +6,27 @@ require_once 'status_tracker.php';
 if (!isset($_SESSION['username'])) { header("Location: index.php"); exit; }
 $current_user = $_SESSION['username'];
 
-// --- ১. ছবি ও টেক্সট সহ পোস্ট তৈরি করার হ্যান্ডলার ---
+// --- ১. পোস্ট এবং রিলস/ভিডিও আপলোড হ্যান্ডলার ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['action'] === 'create_post') {
     header('Content-Type: application/json');
     $content = htmlspecialchars($_POST['content'] ?? '');
-    $post_pic = null;
+    $post_type = $_POST['post_type'] ?? 'post'; // 'post' অথবা 'reel'
+    $upload_path = null;
 
-    if (isset($_FILES['post_pic']) && $_FILES['post_pic']['error'] === UPLOAD_ERR_OK) {
-        $ext = strtolower(pathinfo($_FILES['post_pic']['name'], PATHINFO_EXTENSION));
-        if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif'])) {
-            $post_pic = "uploads/post_" . time() . "_" . uniqid() . "." . $ext;
+    if (isset($_FILES['media_file']) && $_FILES['media_file']['error'] === UPLOAD_ERR_OK) {
+        $ext = strtolower(pathinfo($_FILES['media_file']['name'], PATHINFO_EXTENSION));
+        $allowed = ($post_type === 'reel') ? ['mp4', 'mov', 'avi', 'mkv'] : ['jpg', 'jpeg', 'png', 'gif'];
+        
+        if (in_array($ext, $allowed)) {
+            $upload_path = "uploads/" . $post_type . "_" . time() . "_" . uniqid() . "." . $ext;
             if (!is_dir('uploads/')) { mkdir('uploads/', 0777, true); }
-            move_uploaded_file($_FILES['post_pic']['tmp_name'], $post_pic);
+            move_uploaded_file($_FILES['media_file']['tmp_name'], $upload_path);
         }
     }
 
-    if (!empty($content) || $post_pic !== null) {
-        $stmt = $pdo->prepare("INSERT INTO posts (username, content, post_pic) VALUES (?, ?, ?)");
-        $stmt->execute([$current_user, $content, $post_pic]);
+    if (!empty($content) || $upload_path !== null) {
+        $stmt = $pdo->prepare("INSERT INTO posts (username, content, post_pic, post_type) VALUES (?, ?, ?, ?)");
+        $stmt->execute([$current_user, $content, $upload_path, $post_type]);
         echo json_encode(["status" => "success"]);
     } else {
         echo json_encode(["status" => "empty"]);
@@ -31,144 +34,221 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['ac
     exit;
 }
 
+// --- ২. ফেসবুক অ্যালগরিদম ভিত্তিক স্মার্ট ফিড লোডার (অ্যাডমিন প্রথমে -> তারপর ফ্রেন্ডস -> তারপর পাবলিক) ---
 if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
     header('Content-Type: application/json');
-    $posts = $pdo->query("SELECT * FROM posts ORDER BY created_at DESC LIMIT 30")->fetchAll(PDO::FETCH_ASSOC);
-    echo json_encode($posts);
+    $filter_type = $_GET['type'] ?? 'all'; // 'all' বা 'reel'
+    
+    // ফ্রেন্ডলিস্টের ইউজারদের অ্যারে তৈরি করা
+    $frnd_stmt = $pdo->prepare("SELECT CASE WHEN sender = ? THEN receiver ELSE sender END FROM friends WHERE (sender = ? OR receiver = ?) AND status = 'accepted'");
+    $frnd_stmt->execute([$current_user, $current_user, $current_user]);
+    $friends = $frnd_stmt->fetchAll(PDO::FETCH_COLUMN);
+    $friends_list = !empty($friends) ? "'" . implode("','", $friends) . "'" : "''";
+
+    // আলটিমেট ফেসবুক অ্যালগরিদম সর্টিং কুয়েরি
+    $query = "SELECT *, 
+              CASE 
+                WHEN username = 'adminRubel' THEN 1   -- 👑 অ্যাডমিন সবার আগে গ্লোবাল
+                WHEN username IN ($friends_list) THEN 2 -- 👥 ফ্রেন্ডরা ২য় অগ্রাধিকার
+                ELSE 3                                  -- 🌐 বাকিরা সব শেষে
+              END as priority 
+              FROM posts ";
+              
+    if($filter_type === 'reel') { $query .= " WHERE post_type = 'reel' "; }
+    $query .= " ORDER BY priority ASC, created_at DESC LIMIT 40";
+    
+    $posts = $pdo->query($query)->fetchAll(PDO::FETCH_ASSOC);
+
+    // রিচ কাউন্ট ও লাইক-কমেন্ট সংখ্যার রিয়েল-টাইম কম্পোজিশন
+    $final_posts = [];
+    foreach ($posts as $post) {
+        // 📈 ভিউয়ারের স্ক্রিনে আসা মাত্রই Reach +1
+        $pdo->prepare("UPDATE posts SET reach_count = reach_count + 1 WHERE id = ?")->execute([$post['id']]);
+        
+        // লাইক কাউন্ট
+        $l_stmt = $pdo->prepare("SELECT COUNT(*) FROM likes WHERE post_id = ?"); $l_stmt->execute([$post['id']]);
+        $post['likes'] = $l_stmt->fetchColumn();
+
+        // নিজে লাইক দিয়েছে কিনা চেক
+        $my_l = $pdo->prepare("SELECT COUNT(*) FROM likes WHERE post_id = ? AND username = ?"); $my_l->execute([$post['id'], $current_user]);
+        $post['liked_by_me'] = $my_l->fetchColumn() > 0;
+
+        // কমেন্ট কাউন্ট
+        $c_stmt = $pdo->prepare("SELECT COUNT(*) FROM comments WHERE post_id = ?"); $c_stmt->execute([$post['id']]);
+        $post['comments_count'] = $c_stmt->fetchColumn();
+
+        $final_posts[] = $post;
+    }
+    echo json_encode($final_posts);
     exit;
 }
 
+// --- ৩. লাইক, কমেন্ট ও ভিডিও ভিউ ইন্টারেকশন API ---
+if (isset($_GET['action']) && $_GET['action'] === 'like_post' && isset($_GET['id'])) {
+    $p_id = intval($_GET['id']);
+    try {
+        $pdo->prepare("INSERT INTO likes (post_id, username) VALUES (?, ?)")->execute([$p_id, $current_user]);
+    } catch(Exception $e) {
+        $pdo->prepare("DELETE FROM likes WHERE post_id = ? AND username = ?")->execute([$p_id, $current_user]); // Toggle Like
+    }
+    echo json_encode(["status" => "done"]); exit;
+}
+
+if (isset($_GET['action']) && $_GET['action'] === 'view_video' && isset($_GET['id'])) {
+    $pdo->prepare("UPDATE posts SET views_count = views_count + 1 WHERE id = ?")->execute([intval($_GET['id'])]);
+    echo json_encode(["status" => "counted"]); exit;
+}
+
 $user_pic = 'https://i.imgur.com/8Km9tLL.png';
-$stmt = $pdo->prepare("SELECT profile_pic FROM users WHERE username = ?");
-$stmt->execute([$current_user]);
-$res = $stmt->fetch();
-if ($res && file_exists($res['profile_pic'])) { $user_pic = $res['profile_pic']; }
+$stmt = $pdo->prepare("SELECT profile_pic FROM users WHERE username = ?"); $stmt->execute([$current_user]);
+$res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic = $res['profile_pic']; }
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FriendBook - NewsFeed</title>
+    <title>FriendBook Engine</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body class="bg-[#18191a] text-[#e4e6eb] min-h-screen flex flex-col">
 
-    <nav class="sticky top-0 z-50 bg-[#242526] border-b border-[#393a3b] h-14 flex items-center justify-between px-4 shadow-md">
-        <span class="text-[#1877f2] text-3xl font-black tracking-tighter cursor-pointer" onclick="location.href='feed.php'">FriendBook</span>
+    <nav class="sticky top-0 z-50 bg-[#242526] border-b border-[#393a3b] h-14 flex items-center justify-between px-4 shadow">
+        <span class="text-[#1877f2] text-3xl font-black tracking-tighter cursor-pointer" onclick="switchTab('all')">FriendBook</span>
         <div class="flex items-center gap-4">
-            <a href="friend-list.php" class="w-10 h-10 bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full flex items-center justify-center text-white" title="Find Friends"><i class="fas fa-user-plus"></i></a>
-            <a href="chat.php" class="w-10 h-10 bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full flex items-center justify-center text-white" title="Messenger"><i class="fab fa-facebook-messenger"></i></a>
+            <a href="friend-list.php" class="w-10 h-10 bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full flex items-center justify-center text-white"><i class="fas fa-user-plus"></i></a>
+            <a href="chat.php" class="w-10 h-10 bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full flex items-center justify-center text-white"><i class="fab fa-facebook-messenger"></i></a>
             <a href="profile.php" class="w-10 h-10 rounded-full overflow-hidden border-2 border-[#1877f2] block"><img src="<?php echo $user_pic; ?>" class="w-full h-full object-cover"></a>
-            <a href="index.php?action=logout" class="text-xs text-red-400 hover:underline font-bold">Logout</a>
         </div>
     </nav>
 
     <div class="flex justify-between w-full max-w-[1400px] mx-auto flex-1 px-4 gap-6 mt-4">
-        <aside class="hidden xl:block w-[300px] sticky top-18 h-[calc(100vh-80px)] space-y-1">
-            <a href="profile.php" class="flex items-center gap-3 p-2.5 hover:bg-[#3a3b3c] rounded-xl text-white font-semibold">
-                <img src="<?php echo $user_pic; ?>" class="w-9 h-9 rounded-full object-cover">
-                <span>@<?php echo $current_user; ?></span>
-            </a>
-            <a href="friend-list.php" class="flex items-center gap-3 p-2.5 bg-[#1877f2]/10 text-[#1877f2] rounded-xl font-bold border border-[#1877f2]/20">
-                <i class="fas fa-user-friends text-xl w-8 text-center"></i> <span>Find Friends & Network</span>
-            </a>
+        
+        <aside class="hidden md:block w-[280px] sticky top-18 h-[calc(100vh-80px)] space-y-2">
+            <button onclick="switchTab('all')" id="btnTabAll" class="w-full flex items-center gap-3 p-3 bg-[#3a3b3c] text-white rounded-xl font-bold transition-all">
+                <i class="fas fa-newspaper text-xl text-blue-500"></i> Home NewsFeed
+            </button>
+            <button onclick="switchTab('reel')" id="btnTabReel" class="w-full flex items-center gap-3 p-3 hover:bg-[#3a3b3c] text-gray-300 rounded-xl font-bold transition-all">
+                <i class="fas fa-film text-xl text-red-500"></i> Video Reels Portal
+            </button>
         </aside>
 
-        <main class="w-full max-w-[620px] mx-auto flex-1">
-            <div class="bg-[#242526] rounded-xl p-4 shadow-md mb-5 border border-[#2f3031]">
-                <div class="flex items-center gap-3">
-                    <img src="<?php echo $user_pic; ?>" class="w-10 h-10 rounded-full object-cover">
-                    <input type="text" id="postInput" placeholder="What's on your mind, <?php echo $current_user; ?>?" class="w-full bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full py-2.5 px-4 outline-none text-white text-sm cursor-pointer shadow-inner">
-                </div>
+        <main class="w-full max-w-[580px] mx-auto flex-1 space-y-4">
+            
+            <div class="bg-[#242526] rounded-xl p-4 shadow border border-[#2f3031] flex items-center gap-3">
+                <img src="<?php echo $user_pic; ?>" class="w-9 h-9 rounded-full object-cover">
+                <button onclick="openPostModal('post')" class="w-full bg-[#3a3b3c] hover:bg-[#4e4f50] text-left text-gray-400 text-xs py-2.5 px-4 rounded-full">What's on your mind?</button>
+                <button onclick="openPostModal('reel')" class="bg-[#242526] hover:bg-[#3a3b3c] border border-[#393a3b] p-2.5 rounded-xl text-red-500 text-sm flex items-center gap-1.5 font-bold"><i class="fas fa-video"></i> Reel</button>
             </div>
-            <div id="newsFeed" class="space-y-4 mb-10"></div>
+
+            <div id="dynamicFeedPipeline" class="space-y-4 mb-20"></div>
         </main>
-        <aside class="hidden lg:block w-[280px] sticky top-18 h-[calc(100vh-80px)]"></aside>
+        <aside class="hidden lg:block w-[240px] sticky top-18 h-[calc(100vh-80px)]"></aside>
     </div>
 
-    <div id="postModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="bg-[#242526] w-full max-w-[500px] rounded-xl border border-[#393a3b] p-4 shadow-2xl">
+    <div id="modalBox" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-[#242526] w-full max-w-[480px] rounded-xl border border-[#393a3b] p-4 shadow-2xl">
             <div class="flex justify-between items-center pb-2 border-b border-[#393a3b] mb-4">
-                <h5 class="text-lg font-bold">Create Post</h5>
-                <button onclick="closeModal()" class="text-gray-400 hover:text-white bg-[#3a3b3c] w-7 h-7 rounded-full"><i class="fas fa-times"></i></button>
+                <h5 id="modalTitle" class="text-base font-bold text-white">Create Post</h5>
+                <button onclick="closeModal()" class="text-gray-400 bg-[#3a3b3c] w-6 h-6 rounded-full text-xs"><i class="fas fa-times"></i></button>
             </div>
-            <form id="postForm" onsubmit="submitPost(event)" enctype="multipart/form-data" class="space-y-4">
-                <textarea name="content" id="modalTextarea" rows="4" placeholder="What's on your mind?" class="w-full bg-transparent outline-none text-white text-md resize-none"></textarea>
+            <form id="submissionForm" onsubmit="executePublish(event)" class="space-y-4">
+                <input type="hidden" name="post_type" id="formPostType" value="post">
+                <textarea name="content" id="formTextarea" placeholder="Write text details here..." class="w-full bg-transparent outline-none text-white text-sm resize-none h-24"></textarea>
                 
-                <div class="border border-dashed border-[#393a3b] p-3 rounded-lg flex items-center justify-between bg-[#18191a]">
-                    <span class="text-xs text-gray-400 font-medium">Add to your post:</span>
-                    <label class="cursor-pointer bg-[#3a3b3c] hover:bg-[#4e4f50] px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-2">
-                        <i class="fas fa-image text-green-500 text-sm"></i> Photo
-                        <input type="file" name="post_pic" id="fileInput" accept="image/*" class="hidden" onchange="previewImage(this)">
+                <div class="p-3 bg-[#18191a] rounded-lg border border-[#393a3b] flex justify-between items-center">
+                    <span id="fileLabelHint" class="text-xs text-gray-400">Attach Media Source:</span>
+                    <label class="bg-[#3a3b3c] hover:bg-[#4e4f50] px-3 py-1 rounded text-xs font-bold cursor-pointer text-white">
+                        Browse <input type="file" name="media_file" id="mediaFile" class="hidden">
                     </label>
                 </div>
-                <div id="imgPreviewContainer" class="hidden relative max-h-40 rounded-lg overflow-hidden border border-[#393a3b]">
-                    <img id="imgPreview" class="w-full h-full object-cover">
-                    <button type="button" onclick="clearImage()" class="absolute top-2 right-2 bg-black/70 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs"><i class="fas fa-times"></i></button>
-                </div>
-
-                <button type="submit" class="w-full bg-[#1877f2] py-2 rounded-lg font-bold">Post to Feed</button>
+                <button type="submit" class="w-full bg-[#1877f2] hover:bg-blue-600 py-2 rounded-lg font-black text-xs">Publish Material</button>
             </form>
         </div>
     </div>
 
     <script>
-        const newsFeed = document.getElementById('newsFeed');
-        const postModal = document.getElementById('postModal');
-        const modalTextarea = document.getElementById('modalTextarea');
-        const fileInput = document.getElementById('fileInput');
-        const imgPreviewContainer = document.getElementById('imgPreviewContainer');
-        const imgPreview = document.getElementById('imgPreview');
+        let currentTab = 'all';
+        const pipeline = document.getElementById('dynamicFeedPipeline');
 
-        document.getElementById('postInput').onclick = () => { postModal.classList.remove('hidden'); modalTextarea.focus(); };
-        function closeModal() { postModal.classList.add('hidden'); document.getElementById('postForm').reset(); clearImage(); }
-
-        function previewImage(input) {
-            if (input.files && input.files[0]) {
-                let reader = new FileReader();
-                reader.onload = function(e) { imgPreview.src = e.target.result; imgPreviewContainer.classList.remove('hidden'); }
-                reader.readAsDataURL(input.files[0]);
-            }
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('btnTabAll').className = tab === 'all' ? "w-full flex items-center gap-3 p-3 bg-[#3a3b3c] text-white rounded-xl font-bold" : "w-full flex items-center gap-3 p-3 hover:bg-[#3a3b3c] text-gray-400 rounded-xl font-bold";
+            document.getElementById('btnTabReel').className = tab === 'reel' ? "w-full flex items-center gap-3 p-3 bg-[#3a3b3c] text-white rounded-xl font-bold" : "w-full flex items-center gap-3 p-3 hover:bg-[#3a3b3c] text-gray-400 rounded-xl font-bold";
+            loadPipeline();
         }
-        function clearImage() { fileInput.value = ''; imgPreviewContainer.classList.add('hidden'); imgPreview.src = ''; }
 
-        function submitPost(e) {
+        function openPostModal(type) {
+            document.getElementById('modalBox').classList.remove('hidden');
+            document.getElementById('formPostType').value = type;
+            document.getElementById('modalTitle').innerText = type === 'reel' ? 'Upload Video Reel' : 'Create standard post';
+            document.getElementById('fileLabelHint').innerText = type === 'reel' ? 'Select MP4 Video File:' : 'Select Graphic Image:';
+            document.getElementById('mediaFile').accept = type === 'reel' ? 'video/*' : 'image/*';
+        }
+        function closeModal() { document.getElementById('modalBox').classList.add('hidden'); document.getElementById('submissionForm').reset(); }
+
+        function executePublish(e) {
             e.preventDefault();
-            if (modalTextarea.value.trim() === "" && fileInput.files.length === 0) return;
-            
-            let formData = new FormData(document.getElementById('postForm'));
-            fetch('feed.php?action=create_post', { method: 'POST', body: formData })
-                .then(res => res.json())
-                .then(() => { closeModal(); loadFeed(); });
+            let fd = new FormData(document.getElementById('submissionForm'));
+            fetch('feed.php?action=create_post', { method: 'POST', body: fd }).then(() => { closeModal(); switchTab(currentTab); });
         }
 
-        function loadFeed() {
-            fetch('feed.php?action=fetch_posts')
+        function loadPipeline() {
+            fetch(`feed.php?action=fetch_posts&type=\${currentTab}`)
                 .then(res => res.json())
                 .then(posts => {
-                    newsFeed.innerHTML = '';
-                    posts.forEach(post => {
+                    pipeline.innerHTML = '';
+                    posts.forEach(p => {
                         const card = document.createElement('div');
-                        card.className = "bg-[#242526] rounded-xl p-4 border border-[#2f3031] space-y-3";
+                        card.className = "bg-[#242526] rounded-xl p-4 border border-[#2f3031] space-y-3 relative shadow-sm";
                         
-                        // 🛠️ নিখুঁত এস্কেপ করা জাভাস্ক্রিপ্ট নোড রেন্ডারিং (এরর ফিক্সড)
-                        let imageMarkup = post.post_pic ? `<div class="rounded-lg overflow-hidden border border-[#393a3b] bg-[#18191a] max-h-96"><img src="\${post.post_pic}" class="w-full h-full object-contain"></div>` : '';
+                        // 👮 অ্যাডমিন পোস্ট মেকিং ব্যাজ
+                        let adminBadge = p.username === 'adminRubel' ? `<span class="bg-blue-600 text-[9px] px-1.5 py-0.5 rounded font-black text-white ml-2"><i class="fas fa-shield-alt mr-1"></i>GLOBAL ANNOUNCEMENT</span>` : '';
                         
+                        // 📹 মিডিয়া রেন্ডারার (পোস্ট টাইপ অনুযায়ী ইমেজ নাকি ভিডিও ট্যাগ বসবে)
+                        let mediaMarkup = '';
+                        if (p.post_pic) {
+                            mediaMarkup = p.post_type === 'reel' 
+                                ? `<div class="rounded-xl overflow-hidden bg-black max-h-[450px]"><video src="\${p.post_pic}" controls class="w-full h-full" onplay="registerVideoView(\${p.id})"></video></div>`
+                                : `<div class="rounded-xl overflow-hidden border border-[#393a3b]"><img src="\${p.post_pic}" class="w-full object-cover"></div>`;
+                        }
+
+                        // ভিডিও রিলসের জন্য এক্সক্লুসিভ ভিউ ইন্ডিকেটর
+                        let counterAnalytics = p.post_type === 'reel' ? `<span class="text-xs text-gray-400 font-mono"><i class="fas fa-eye mr-1"></i>\${p.views_count} views</span>` : '';
+
                         card.innerHTML = `
-                            <div class="flex items-center gap-3">
-                                <div class="w-9 h-9 bg-[#1877f2] rounded-full flex items-center justify-center font-bold text-xs uppercase">\${post.username.substring(0,2)}</div>
-                                <div><h6 class="font-bold text-sm">@\${post.username}</h6><span class="text-[10px] text-gray-400">\${post.created_at}</span></div>
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <div class="w-8 h-8 bg-neutral-700 text-white flex items-center justify-center rounded-full font-bold text-xs uppercase">\${p.username.substring(0,2)}</div>
+                                    <div>
+                                        <h6 class="font-black text-xs flex items-center">@\${p.username} \${adminBadge}</h6>
+                                        <span class="text-[9px] text-gray-500">\${p.created_at}</span>
+                                    </div>
+                                </div>
+                                <div class="text-[10px] text-gray-500 font-mono flex gap-2">
+                                    <span><i class="fas fa-chart-line mr-1"></i>\${p.reach_count} Reach</span>
+                                    \${counterAnalytics}
+                                </div>
                             </div>
-                            <p class="text-gray-200 text-sm whitespace-pre-wrap leading-relaxed">\${post.content}</p>
-                            \${imageMarkup}
+                            <p class="text-gray-200 text-xs leading-relaxed whitespace-pre-wrap">\${p.content}</p>
+                            \${mediaMarkup}
+                            <hr class="border-[#393a3b] my-2">
+                            <div class="flex justify-between px-2 items-center">
+                                <button onclick="triggerLike(\${p.id})" class="text-xs font-bold flex items-center gap-1.5 \${p.liked_by_me ? 'text-blue-500':'text-gray-400'}">
+                                    <i class="fas fa-thumbs-up"></i> <span>\${p.likes} Likes</span>
+                                </button>
+                                <span class="text-xs text-gray-400 font-medium"><i class="far fa-comment-alt mr-1"></i>\${p.comments_count} Comments</span>
+                            </div>
                         `;
-                        newsFeed.appendChild(card);
+                        pipeline.appendChild(card);
                     });
                 });
         }
-        setInterval(loadFeed, 6000); loadFeed();
 
+        function triggerLike(id) { fetch(`feed.php?action=like_post&id=\${id}`).then(() => loadPipeline()); }
+        function registerVideoView(id) { fetch(`feed.php?action=view_video&id=\${id}`); }
+
+        switchTab('all');
         function sendHeartbeat() { fetch('status_tracker.php?action=heartbeat').catch(() => {}); }
         setInterval(sendHeartbeat, 10000); sendHeartbeat();
     </script>
