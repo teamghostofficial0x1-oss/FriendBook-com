@@ -1,119 +1,106 @@
 <?php
-// ১. সেন্ট্রাল ডাটাবেজ কনফিগারেশন ইনক্লুড করা
 require_once 'src/api/endpoint/db/db_config.php';
+session_start();
 
-// 🔴 অটোমেটিক ইউজার টেবিল তৈরি এবং ডেমো ডাটা ইনসার্ট মেকানিজম
-try {
-    // টেবিল না থাকলে তৈরি করবে
-    $pdo->exec("CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        bio TEXT,
-        profile_pic VARCHAR(255) DEFAULT 'default.png',
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )");
-
-    // ডেমো ইউজার 'CyberNinja' অলরেডি আছে কিনা চেক করে ইনসার্ট করা
-    $check_stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = 'CyberNinja'");
-    $check_stmt->execute();
-    
-    if ($check_stmt->fetchColumn() == 0) {
-        $insert_demo = $pdo->prepare("INSERT INTO users (username, bio, profile_pic) VALUES (?, ?, ?)");
-        $insert_demo->execute(['CyberNinja', 'Coding is life. Secure everything!', 'default.png']);
-    }
-} catch (PDOException $e) {
-    // কোনো এরর হলে সেটা ব্যাকগ্রাউন্ডে ইগনোর করবে যেন পেজ ক্র্যাশ না করে
+// 🍪 অটো-লগইন সিঙ্ক
+if (!isset($_SESSION['username']) && isset($_COOKIE['remember_me'])) {
+    $token = $_COOKIE['remember_me'];
+    $stmt = $pdo->prepare("SELECT username FROM users WHERE remember_token = ? AND remember_expires > NOW()");
+    $stmt->execute([$token]);
+    $user = $stmt->fetch();
+    if ($user) { $_SESSION['username'] = $user['username']; }
 }
 
-// আপাতত ডেমো ইউজার হিসেবে কাজ করছি (ভবিষ্যতে লগইন সিস্টেমের সাথে সিঙ্ক হবে)
-$current_user = 'CyberNinja'; 
-$message = '';
-$status = '';
+// সিকিউরিটি গার্ড লক
+if (!isset($_SESSION['username'])) {
+    header("Location: index.php");
+    exit;
+}
 
-// ডাটাবেজ থেকে ইউজারের বর্তমান তথ্য তুলে আনা
+$current_user = $_SESSION['username']; 
+$message = ''; $status = '';
+
+// ডাটাবেজ থেকে ইউজারের বর্তমান প্রোফাইল ডাটা তুলে আনা
 $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ?");
 $stmt->execute([$current_user]);
 $user_info = $stmt->fetch();
 
-// যদি কোনো কারণে ইউজার তথ্য না পাওয়া যায় (সেফটি চেক)
-if (!$user_info) {
-    $user_info = ['username' => $current_user, 'bio' => 'Coding is life. Secure everything!', 'profile_pic' => 'default.png'];
-}
-
-// ফরম সাবমিট এবং ফাইল আপলোড হ্যান্ডলিং (Sanitized & Secured)
+// ইমেজ আপলোড এবং প্রোফাইল সেভ মেকানিজম
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $bio = htmlspecialchars(trim($_POST['bio'] ?? ''));
     $uploaded_file = $_FILES['profile_pic'] ?? null;
-    $profile_pic_name = $user_info['profile_pic']; // ডিফল্ট বা আগের ছবি রেখে দেওয়া
+    $profile_pic_name = $user_info['profile_pic'] ?? 'default.png';
 
-    // ১. ফাইল আপলোড এবং স্যানিটাইজেশন মেকানিজম
     if ($uploaded_file && $uploaded_file['error'] === UPLOAD_ERR_OK) {
-        
-        // ডাইনামিক পাথ তৈরি: src/api/endpoint/uploads/{username}/
         $target_dir = "src/api/endpoint/uploads/" . preg_replace('/[^a-zA-Z0-9_]/', '', $current_user) . "/";
-        
-        // ফোল্ডার না থাকলে পারমিশনসহ তৈরি করা
-        if (!file_exists($target_dir)) {
-            mkdir($target_dir, 0755, true);
-        }
+        if (!file_exists($target_dir)) { mkdir($target_dir, 0755, true); }
 
         $file_name = basename($uploaded_file['name']);
-        $file_size = $uploaded_file['size'];
-        $file_tmp  = $uploaded_file['tmp_name'];
-        
-        // ফাইলের এক্সটেনশন চেক
         $file_ext = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
-        $allowed_exts = ['jpg', 'jpeg', 'png', 'gif'];
-
-        // সিকিউরিটি চেক: MIME-Type ভ্যালিডেশন
-        $finfo = finfo_open(FILEINFO_MIME_TYPE);
-        $mime_type = finfo_file($finfo, $file_tmp);
-        finfo_close($finfo);
-        $allowed_mimes = ['image/jpeg', 'image/png', 'image/gif'];
-
-        if (!in_array($file_ext, $allowed_exts) || !in_array($mime_type, $allowed_mimes)) {
-            $message = "Invalid file type! Only JPG, PNG, and GIF are allowed.";
-            $status = "error";
-        } elseif ($file_size > 2 * 1024 * 1024) { // সাইজ লিমিট: ২ মেগাবাইট
-            $message = "File is too large! Maximum size limit is 2MB.";
-            $status = "error";
-        } else {
-            // ফাইল নাম স্যানিটাইজেশন
+        
+        if (in_array($file_ext, ['jpg', 'jpeg', 'png', 'gif'])) {
             $new_file_name = "profile_" . uniqid() . "." . $file_ext;
             $target_file = $target_dir . $new_file_name;
 
-            if (move_uploaded_file($file_tmp, $target_file)) {
-                // পুরানো ছবি ডিলিট করা (ডিফল্ট ছবি না হলে)
+            if (move_uploaded_file($uploaded_file['tmp_name'], $target_file)) {
                 if ($user_info['profile_pic'] !== 'default.png' && file_exists($user_info['profile_pic'])) {
                     @unlink($user_info['profile_pic']);
                 }
-                $profile_pic_name = $target_file; // নতুন পাথ সেভ হবে
-            } else {
-                $message = "Failed to upload image due to server permission.";
-                $status = "error";
+                $profile_pic_name = $target_file;
             }
-        }
+        } else { $message = "Invalid image type!"; $status = "error"; }
     }
 
-    // ২. ডাটাবেজ আপডেট (যদি কোনো সিকিউরিটি এরর না থাকে)
     if ($status !== 'error') {
-        try {
-            $update_stmt = $pdo->prepare("UPDATE users SET bio = ?, profile_pic = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?");
-            $update_stmt->execute([$bio, $profile_pic_name, $current_user]);
-            
-            $message = "Profile updated successfully!";
-            $status = "success";
-            
-            // লোকাল ভেরিয়েবল রিফ্রেশ করা
-            $user_info['bio'] = $bio;
-            $user_info['profile_pic'] = $profile_pic_name;
-        } catch (PDOException $e) {
-            $message = "Database update failed: " . $e->getMessage();
-            $status = "error";
-        }
+        $update_stmt = $pdo->prepare("UPDATE users SET bio = ?, profile_pic = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?");
+        $update_stmt->execute([$bio, $profile_pic_name, $current_user]);
+        $message = "Profile synced successfully!"; $status = "success";
+        $user_info['bio'] = $bio; $user_info['profile_pic'] = $profile_pic_name;
     }
 }
 
-// ডিফল্ট ছবির ক্ষেত্রে প্লেসহোল্ডার অ্যাভাটার ব্যবহার
-$display_pic = (file_exists($user_info['profile_pic'])) ? $user_info['profile_pic'] : 'https://i.imgur.com/8Km9tLL.png';
+$display_pic = (!empty($user_info['profile_pic']) && file_exists($user_info['profile_pic'])) ? $user_info['profile_pic'] : 'https://i.imgur.com/8Km9tLL.png';
 ?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><title>Profile Settings - FriendBook</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-[#18191a] text-[#e4e6eb] min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="bg-[#242526] border border-[#393a3b] p-6 rounded-xl w-full max-w-md shadow-xl">
+        <div class="flex justify-between items-center mb-4">
+            <a href="feed.php" class="text-xs text-[#1877f2] font-bold"><i class="fas fa-arrow-left mr-1"></i> Back to Feed</a>
+            <h4 class="text-md font-bold">Edit Profile</h4>
+        </div>
+
+        <?php if($message): ?><div class="p-3 text-xs rounded mb-4 font-bold <?php echo $status==='success'?'bg-green-500/10 text-green-400':'bg-red-500/10 text-red-400';?>"><?php echo $message; ?></div><?php endif; ?>
+
+        <form action="profile.php" method="POST" enctype="multipart/form-data" class="space-y-4 text-center">
+            <div class="relative w-28 h-28 mx-auto rounded-full overflow-hidden border-4 border-[#1877f2]">
+                <img src="<?php echo $display_pic; ?>" class="w-full h-full object-cover">
+            </div>
+            
+            <div class="text-left">
+                <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Username</label>
+                <input type="text" value="@<?php echo $current_user; ?>" disabled class="w-full bg-[#18191a] p-2.5 rounded text-sm text-gray-500 border border-[#393a3b] cursor-not-allowed">
+            </div>
+
+            <div class="text-left">
+                <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Update Avatar</label>
+                <input type="file" name="profile_pic" class="w-full bg-[#3a3b3c] p-2 rounded text-xs">
+            </div>
+
+            <div class="text-left">
+                <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Bio Text</label>
+                <textarea name="bio" rows="3" class="w-full bg-[#3a3b3c] p-2.5 rounded text-sm outline-none border border-[#393a3b] focus:border-[#1877f2]"><?php echo htmlspecialchars($user_info['bio'] ?? ''); ?></textarea>
+            </div>
+
+            <button type="submit" class="w-full bg-[#1877f2] py-2 rounded-lg font-bold text-sm hover:bg-[#1565c0]">Save Modifications</button>
+        </form>
+    </div>
+
+</body>
+</html>
