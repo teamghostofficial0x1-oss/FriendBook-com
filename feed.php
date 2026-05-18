@@ -1,7 +1,10 @@
 <?php
 require_once 'src/api/endpoint/db/db_config.php';
 session_start();
-require_once 'status_tracker.php';
+
+if (file_exists('status_tracker.php')) {
+    require_once 'status_tracker.php';
+}
 
 if (!isset($_SESSION['username'])) { header("Location: index.php"); exit; }
 $current_user = $_SESSION['username'];
@@ -18,8 +21,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['ac
         $allowed = ($post_type === 'reel') ? ['mp4', 'mov', 'avi', 'mkv'] : ['jpg', 'jpeg', 'png', 'gif'];
         
         if (in_array($ext, $allowed)) {
-            $upload_path = "uploads/" . $post_type . "_" . time() . "_" . uniqid() . "." . $ext;
-            if (!is_dir('uploads/')) { mkdir('uploads/', 0777, true); }
+            $dir = 'uploads/';
+            if (!is_dir($dir)) { mkdir($dir, 0777, true); }
+            $upload_path = $dir . $post_type . "_" . time() . "_" . uniqid() . "." . $ext;
             move_uploaded_file($_FILES['media_file']['tmp_name'], $upload_path);
         }
     }
@@ -34,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['ac
     exit;
 }
 
-// --- ২. ফেসবুক অ্যালগরিদম ভিত্তিক স্মার্ট ফিড লোডার ---
+// --- ২. ফিক্সড নিউজফিড লোডার অ্যালগরিদম ---
 if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
     header('Content-Type: application/json');
     $filter_type = $_GET['type'] ?? 'all'; 
@@ -52,7 +56,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
         $execute_params = [];
     }
 
-    // 👑 বুস্টিং অ্যালগরিদম: অ্যাডমিন সবার আগে -> তারপর ফ্রেন্ডস -> তারপর নরমাল
+    // বুস্টিং অ্যালগরিদম
     $query = "SELECT *, 
               CASE 
                 WHEN username = 'adminRubel' THEN 1   
@@ -72,6 +76,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
 
     $final_posts = [];
     foreach ($posts as $post) {
+        // রিচ কাউন্ট আপডেট
         $pdo->prepare("UPDATE posts SET reach_count = reach_count + 1 WHERE id = ?")->execute([$post['id']]);
         
         $l_stmt = $pdo->prepare("SELECT COUNT(*) FROM likes WHERE post_id = ?"); $l_stmt->execute([$post['id']]);
@@ -87,14 +92,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
     exit;
 }
 
-// --- লাইক ও ভিউ API ---
+// লাইক ও ভিউ API 
 if (isset($_GET['action']) && $_GET['action'] === 'like_post' && isset($_GET['id'])) {
     $p_id = intval($_GET['id']);
-    try {
-        $pdo->prepare("INSERT INTO likes (post_id, username) VALUES (?, ?)")->execute([$p_id, $current_user]);
-    } catch(Exception $e) {
-        $pdo->prepare("DELETE FROM likes WHERE post_id = ? AND username = ?")->execute([$p_id, $current_user]);
-    }
+    try { $pdo->prepare("INSERT INTO likes (post_id, username) VALUES (?, ?)")->execute([$p_id, $current_user]); } 
+    catch(Exception $e) { $pdo->prepare("DELETE FROM likes WHERE post_id = ? AND username = ?")->execute([$p_id, $current_user]); }
     echo json_encode(["status" => "done"]); exit;
 }
 
@@ -155,7 +157,7 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
                 <h5 id="modalTitle" class="text-base font-bold text-white">Create Post</h5>
                 <button onclick="closeModal()" class="text-gray-400 bg-[#3a3b3c] w-6 h-6 rounded-full text-xs"><i class="fas fa-times"></i></button>
             </div>
-            <form id="submissionForm" onsubmit="executePublish(event)" class="space-y-4">
+            <form id="submissionForm" onsubmit="executePublish(event)" class="space-y-4" enctype="multipart/form-data">
                 <input type="hidden" name="post_type" id="formPostType" value="post">
                 <textarea name="content" id="formTextarea" placeholder="Write text details here..." class="w-full bg-transparent outline-none text-white text-sm resize-none h-24"></textarea>
                 
@@ -193,7 +195,15 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
         function executePublish(e) {
             e.preventDefault();
             let fd = new FormData(document.getElementById('submissionForm'));
-            fetch('feed.php?action=create_post', { method: 'POST', body: fd }).then(() => { closeModal(); switchTab(currentTab); });
+            fetch('feed.php?action=create_post', { method: 'POST', body: fd })
+            .then(res => res.json())
+            .then(data => {
+                closeModal(); 
+                switchTab(currentTab); 
+            }).catch(err => {
+                closeModal();
+                switchTab(currentTab);
+            });
         }
 
         function loadPipeline() {
@@ -212,7 +222,7 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
                         let adminBadge = p.username === 'adminRubel' ? `<span class="bg-blue-600 text-[9px] px-1.5 py-0.5 rounded font-black text-white ml-2"><i class="fas fa-shield-alt mr-1"></i>GLOBAL ANNOUNCEMENT</span>` : '';
                         
                         let mediaMarkup = '';
-                        if (p.post_pic) {
+                        if (p.post_pic && p.post_pic.trim() !== '') {
                             mediaMarkup = p.post_type === 'reel' 
                                 ? `<div class="rounded-xl overflow-hidden bg-black max-h-[450px]"><video src="\${p.post_pic}" controls class="w-full h-full" onplay="registerVideoView(\${p.id})"></video></div>`
                                 : `<div class="rounded-xl overflow-hidden border border-[#393a3b]"><img src="\${p.post_pic}" class="w-full object-cover"></div>`;
@@ -220,7 +230,6 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
 
                         let counterAnalytics = p.post_type === 'reel' ? `<span class="text-xs text-gray-400 font-mono"><i class="fas fa-eye mr-1"></i>\${p.views_count} views</span>` : '';
 
-                        // 🔗 এখানে ইউজারের নামের ওপর ক্লিক করলে তার ডাইনামিক প্রোফাইলে নিয়ে যাবে
                         card.innerHTML = `
                             <div class="flex items-center justify-between">
                                 <a href="profile.php?user=\${p.username}" class="flex items-center gap-2 hover:underline cursor-pointer">
