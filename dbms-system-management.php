@@ -11,9 +11,22 @@ if (!isset($_SESSION['username']) || $_SESSION['username'] !== 'adminRubel') {
 
 $msg = '';
 
+// 💥 [AUTOMATIC INFRASTRUCTURE FIX]: কলাম না থাকলে স্বয়ংক্রিয়ভাবে তৈরি করার লজিক
+try {
+    $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified INT DEFAULT 0;");
+} catch (PDOException $e) {
+    // যদি ডাটাবেজ ড্রাইভার IF NOT EXISTS সাপোর্ট না করে (যেমন পুরানো PGSQL সংস্করণ)
+    try {
+        $pdo->exec("ALTER TABLE users ADD COLUMN is_verified INT DEFAULT 0;");
+    } catch (Exception $ex) {
+        // কলাম ইতিমধ্যে থাকলে এরর ইগনোর করবে
+    }
+}
+
 // 🎯 ভেরিফিকেশন স্টেট চেঞ্জার অ্যাকশন টগল
 if (isset($_GET['action']) && $_GET['action'] === 'toggle_verify' && isset($_GET['username'])) {
     $target_user = trim($_GET['username']);
+    
     $status_stmt = $pdo->prepare("SELECT is_verified FROM users WHERE username = ?");
     $status_stmt->execute([$target_user]);
     $current_status = $status_stmt->fetchColumn();
@@ -61,7 +74,7 @@ $users_list = $pdo->query("SELECT id, username, email, is_verified FROM users OR
         <?php endif; ?>
 
         <div class="bg-[#18191a] rounded-xl border border-[#2f3031] overflow-hidden">
-            <div class="p-4 bg-[#242526] border-b border-[#2f3031] font-bold text-xs uppercase text-gray-300">User Infrastructure Registry</div>
+            <div class="p-4 bg-[#242526] border-b border-[#2f3031] font-bold text-xs uppercase text-gray-300">User Infrastructure Registry (Total: <?php echo $total_users; ?>)</div>
             <table class="w-full text-left text-xs">
                 <thead>
                     <tr class="bg-[#1c1d1e] text-gray-400 border-b border-[#2f3031]">
