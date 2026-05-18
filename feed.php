@@ -10,7 +10,7 @@ $current_user = $_SESSION['username'];
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['action'] === 'create_post') {
     header('Content-Type: application/json');
     $content = htmlspecialchars($_POST['content'] ?? '');
-    $post_type = $_POST['post_type'] ?? 'post'; // 'post' অথবা 'reel'
+    $post_type = $_POST['post_type'] ?? 'post'; 
     $upload_path = null;
 
     if (isset($_FILES['media_file']) && $_FILES['media_file']['error'] === UPLOAD_ERR_OK) {
@@ -34,48 +34,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['ac
     exit;
 }
 
-// --- ২. ফেসবুক অ্যালগরিদম ভিত্তিক স্মার্ট ফিড লোডার (অ্যাডমিন প্রথমে -> তারপর ফ্রেন্ডস -> তারপর পাবলিক) ---
+// --- ২. ফিক্সড ফেসবুক অ্যালগরিদম (ইনবক্স বা ফ্রেন্ডলিস্ট ফাঁকা থাকলেও ক্র্যাশ করবে না) ---
 if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
     header('Content-Type: application/json');
-    $filter_type = $_GET['type'] ?? 'all'; // 'all' বা 'reel'
+    $filter_type = $_GET['type'] ?? 'all'; 
     
-    // ফ্রেন্ডলিস্টের ইউজারদের অ্যারে তৈরি করা
+    // ফ্রেন্ডলিস্ট নেওয়া
     $frnd_stmt = $pdo->prepare("SELECT CASE WHEN sender = ? THEN receiver ELSE sender END FROM friends WHERE (sender = ? OR receiver = ?) AND status = 'accepted'");
     $frnd_stmt->execute([$current_user, $current_user, $current_user]);
     $friends = $frnd_stmt->fetchAll(PDO::FETCH_COLUMN);
-    $friends_list = !empty($friends) ? "'" . implode("','", $friends) . "'" : "''";
 
-    // আলটিমেট ফেসবুক অ্যালগরিদম সর্টিং কুয়েরি
+    // SQL ইনজেকশন মুক্ত এবং সেফ ফ্রেন্ডলিস্ট হ্যান্ডলিং
+    if (!empty($friends)) {
+        $in_clause = implode(',', array_fill(0, count($friends), '?'));
+        $execute_params = $friends;
+    } else {
+        $in_clause = "'__NO_FRIENDS__'";
+        $execute_params = [];
+    }
+
+    // 👑 বুস্টিং অ্যালগরিদম: অ্যাডমিন সবার আগে -> তারপর ফ্রেন্ডস -> তারপর নরমাল
     $query = "SELECT *, 
               CASE 
-                WHEN username = 'adminRubel' THEN 1   -- 👑 অ্যাডমিন সবার আগে গ্লোবাল
-                WHEN username IN ($friends_list) THEN 2 -- 👥 ফ্রেন্ডরা ২য় অগ্রাধিকার
-                ELSE 3                                  -- 🌐 বাকিরা সব শেষে
+                WHEN username = 'adminRubel' THEN 1   
+                WHEN username IN ($in_clause) THEN 2 
+                ELSE 3                                  
               END as priority 
               FROM posts ";
               
-    if($filter_type === 'reel') { $query .= " WHERE post_type = 'reel' "; }
+    if($filter_type === 'reel') { 
+        $query .= " WHERE post_type = 'reel' "; 
+    }
     $query .= " ORDER BY priority ASC, created_at DESC LIMIT 40";
     
-    $posts = $pdo->query($query)->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $pdo->prepare($query);
+    $stmt->execute($execute_params);
+    $posts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // রিচ কাউন্ট ও লাইক-কমেন্ট সংখ্যার রিয়েল-টাইম কম্পোজিশন
+    // রিচ কাউন্ট ও লাইক-কমেন্ট লাইভ সিঙ্ক
     $final_posts = [];
     foreach ($posts as $post) {
-        // 📈 ভিউয়ারের স্ক্রিনে আসা মাত্রই Reach +1
         $pdo->prepare("UPDATE posts SET reach_count = reach_count + 1 WHERE id = ?")->execute([$post['id']]);
         
-        // লাইক কাউন্ট
         $l_stmt = $pdo->prepare("SELECT COUNT(*) FROM likes WHERE post_id = ?"); $l_stmt->execute([$post['id']]);
         $post['likes'] = $l_stmt->fetchColumn();
 
-        // নিজে লাইক দিয়েছে কিনা চেক
         $my_l = $pdo->prepare("SELECT COUNT(*) FROM likes WHERE post_id = ? AND username = ?"); $my_l->execute([$post['id'], $current_user]);
         $post['liked_by_me'] = $my_l->fetchColumn() > 0;
 
-        // কমেন্ট কাউন্ট
-        $c_stmt = $pdo->prepare("SELECT COUNT(*) FROM comments WHERE post_id = ?"); $c_stmt->execute([$post['id']]);
-        $post['comments_count'] = $c_stmt->fetchColumn();
+        $post['comments_count'] = 0; // আপাতত ডিফল্ট ০ রাখা হলো
 
         $final_posts[] = $post;
     }
@@ -83,13 +90,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
     exit;
 }
 
-// --- ৩. লাইক, কমেন্ট ও ভিডিও ভিউ ইন্টারেকশন API ---
+// --- লাইক ও ভিউ API ---
 if (isset($_GET['action']) && $_GET['action'] === 'like_post' && isset($_GET['id'])) {
     $p_id = intval($_GET['id']);
     try {
         $pdo->prepare("INSERT INTO likes (post_id, username) VALUES (?, ?)")->execute([$p_id, $current_user]);
     } catch(Exception $e) {
-        $pdo->prepare("DELETE FROM likes WHERE post_id = ? AND username = ?")->execute([$p_id, $current_user]); // Toggle Like
+        $pdo->prepare("DELETE FROM likes WHERE post_id = ? AND username = ?")->execute([$p_id, $current_user]);
     }
     echo json_encode(["status" => "done"]); exit;
 }
@@ -116,14 +123,15 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
     <nav class="sticky top-0 z-50 bg-[#242526] border-b border-[#393a3b] h-14 flex items-center justify-between px-4 shadow">
         <span class="text-[#1877f2] text-3xl font-black tracking-tighter cursor-pointer" onclick="switchTab('all')">FriendBook</span>
         <div class="flex items-center gap-4">
-            <a href="friend-list.php" class="w-10 h-10 bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full flex items-center justify-center text-white"><i class="fas fa-user-plus"></i></a>
-            <a href="chat.php" class="w-10 h-10 bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full flex items-center justify-center text-white"><i class="fab fa-facebook-messenger"></i></a>
-            <a href="profile.php" class="w-10 h-10 rounded-full overflow-hidden border-2 border-[#1877f2] block"><img src="<?php echo $user_pic; ?>" class="w-full h-full object-cover"></a>
+            <a href="friend-list.php" class="w-10 h-10 bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full flex items-center justify-center text-white" title="Find Friends"><i class="fas fa-user-plus"></i></a>
+            <a href="chat.php" class="w-10 h-10 bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full flex items-center justify-center text-white" title="Messenger"><i class="fab fa-facebook-messenger"></i></a>
+            <a href="profile.php" class="w-10 h-10 rounded-full overflow-hidden border-2 border-[#1877f2] block" title="My Profile"><img src="<?php echo $user_pic; ?>" class="w-full h-full object-cover"></a>
+            
+            <a href="index.php?action=logout" class="bg-red-600/10 hover:bg-red-600 text-red-400 hover:text-white px-3 py-1.5 rounded-xl text-xs font-black transition-all border border-red-500/20"><i class="fas fa-sign-out-alt mr-1"></i>Logout</a>
         </div>
     </nav>
 
     <div class="flex justify-between w-full max-w-[1400px] mx-auto flex-1 px-4 gap-6 mt-4">
-        
         <aside class="hidden md:block w-[280px] sticky top-18 h-[calc(100vh-80px)] space-y-2">
             <button onclick="switchTab('all')" id="btnTabAll" class="w-full flex items-center gap-3 p-3 bg-[#3a3b3c] text-white rounded-xl font-bold transition-all">
                 <i class="fas fa-newspaper text-xl text-blue-500"></i> Home NewsFeed
@@ -134,10 +142,9 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
         </aside>
 
         <main class="w-full max-w-[580px] mx-auto flex-1 space-y-4">
-            
             <div class="bg-[#242526] rounded-xl p-4 shadow border border-[#2f3031] flex items-center gap-3">
                 <img src="<?php echo $user_pic; ?>" class="w-9 h-9 rounded-full object-cover">
-                <button onclick="openPostModal('post')" class="w-full bg-[#3a3b3c] hover:bg-[#4e4f50] text-left text-gray-400 text-xs py-2.5 px-4 rounded-full">What's on your mind?</button>
+                <button onclick="openPostModal('post')" class="w-full bg-[#3a3b3c] hover:bg-[#4e4f50] text-left text-gray-400 text-xs py-2.5 px-4 rounded-full">What's on your mind, <?php echo $current_user; ?>?</button>
                 <button onclick="openPostModal('reel')" class="bg-[#242526] hover:bg-[#3a3b3c] border border-[#393a3b] p-2.5 rounded-xl text-red-500 text-sm flex items-center gap-1.5 font-bold"><i class="fas fa-video"></i> Reel</button>
             </div>
 
@@ -198,14 +205,16 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
                 .then(res => res.json())
                 .then(posts => {
                     pipeline.innerHTML = '';
+                    if(posts.length === 0) {
+                        pipeline.innerHTML = '<p class="text-xs text-gray-500 text-center py-10">No posts visible in this pipeline.</p>';
+                        return;
+                    }
                     posts.forEach(p => {
                         const card = document.createElement('div');
                         card.className = "bg-[#242526] rounded-xl p-4 border border-[#2f3031] space-y-3 relative shadow-sm";
                         
-                        // 👮 অ্যাডমিন পোস্ট মেকিং ব্যাজ
                         let adminBadge = p.username === 'adminRubel' ? `<span class="bg-blue-600 text-[9px] px-1.5 py-0.5 rounded font-black text-white ml-2"><i class="fas fa-shield-alt mr-1"></i>GLOBAL ANNOUNCEMENT</span>` : '';
                         
-                        // 📹 মিডিয়া রেন্ডারার (পোস্ট টাইপ অনুযায়ী ইমেজ নাকি ভিডিও ট্যাগ বসবে)
                         let mediaMarkup = '';
                         if (p.post_pic) {
                             mediaMarkup = p.post_type === 'reel' 
@@ -213,7 +222,6 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
                                 : `<div class="rounded-xl overflow-hidden border border-[#393a3b]"><img src="\${p.post_pic}" class="w-full object-cover"></div>`;
                         }
 
-                        // ভিডিও রিলসের জন্য এক্সক্লুসিভ ভিউ ইন্ডিকেটর
                         let counterAnalytics = p.post_type === 'reel' ? `<span class="text-xs text-gray-400 font-mono"><i class="fas fa-eye mr-1"></i>\${p.views_count} views</span>` : '';
 
                         card.innerHTML = `
@@ -249,8 +257,6 @@ $res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic
         function registerVideoView(id) { fetch(`feed.php?action=view_video&id=\${id}`); }
 
         switchTab('all');
-        function sendHeartbeat() { fetch('status_tracker.php?action=heartbeat').catch(() => {}); }
-        setInterval(sendHeartbeat, 10000); sendHeartbeat();
     </script>
 </body>
 </html>
