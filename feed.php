@@ -9,7 +9,7 @@ if (file_exists('status_tracker.php')) {
 if (!isset($_SESSION['username'])) { header("Location: index.php"); exit; }
 $current_user = $_SESSION['username'];
 
-// --- ১. পোস্ট এবং রিলস/ভিডিও আপলোড হ্যান্ডলার ---
+// --- ১. ডাইনামিক ইউজার ফোল্ডার বেসড পোস্ট এবং রিলস আপলোড হ্যান্ডলার ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['action'] === 'create_post') {
     header('Content-Type: application/json');
     $content = htmlspecialchars($_POST['content'] ?? '');
@@ -21,9 +21,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['ac
         $allowed = ($post_type === 'reel') ? ['mp4', 'mov', 'avi', 'mkv'] : ['jpg', 'jpeg', 'png', 'gif'];
         
         if (in_array($ext, $allowed)) {
-            $dir = 'uploads/';
-            if (!is_dir($dir)) { mkdir($dir, 0777, true); }
-            $upload_path = $dir . $post_type . "_" . time() . "_" . uniqid() . "." . $ext;
+            // 🎯 আপনার রিকোয়েস্ট অনুযায়ী ডাইনামিক ইউজারনেম ফোল্ডার পাথ সেট করা হলো
+            $target_dir = "src/api/endpoint/uploads/" . $current_user . "/";
+            
+            // ফোল্ডার না থাকলে স্বয়ংক্রিয়ভাবে তৈরি করবে (Permission 0777 সহ)
+            if (!is_dir($target_dir)) { 
+                mkdir($target_dir, 0777, true); 
+            }
+            
+            // ইউনিক ফাইলনেম জেনারেট করে পাথে সেট করা
+            $upload_path = $target_dir . $post_type . "_" . time() . "_" . uniqid() . "." . $ext;
             move_uploaded_file($_FILES['media_file']['tmp_name'], $upload_path);
         }
     }
@@ -38,7 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['ac
     exit;
 }
 
-// --- ২. ফিক্সড নিউজফিড লোডার অ্যালগরিদম ---
+// --- ২. নিউজফিড লোডার অ্যালগরিদম ---
 if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
     header('Content-Type: application/json');
     $filter_type = $_GET['type'] ?? 'all'; 
@@ -105,9 +112,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'view_video' && isset($_GET['i
     echo json_encode(["status" => "counted"]); exit;
 }
 
+// প্রোফাইল পিকচার পাথ চেক
 $user_pic = 'https://i.imgur.com/8Km9tLL.png';
 $stmt = $pdo->prepare("SELECT profile_pic FROM users WHERE username = ?"); $stmt->execute([$current_user]);
-$res = $stmt->fetch(); if ($res && file_exists($res['profile_pic'])) { $user_pic = $res['profile_pic']; }
+$res = $stmt->fetch(); if ($res && !empty($res['profile_pic']) && file_exists($res['profile_pic'])) { $user_pic = $res['profile_pic']; }
 ?>
 <!DOCTYPE html>
 <html lang="en">
