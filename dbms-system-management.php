@@ -7,7 +7,7 @@ error_reporting(E_ALL);
 require_once 'src/api/endpoint/db/db_config.php';
 session_start();
 
-// status_tracker.php ফাইলটি থাকলে লোড করবে, না থাকলে ক্র্যাশ করবে না
+// status_tracker.php ফাইলটি থাকলে লোড করবে
 if (file_exists('status_tracker.php')) {
     require_once 'status_tracker.php';
 }
@@ -42,7 +42,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete_user' && isset($_GET['
     if ($target_del !== 'adminRubel') {
         $del_u = $pdo->prepare("DELETE FROM users WHERE username = ?");
         $del_u->execute([$target_del]);
-        // সংশ্লিষ্ট ইউজারের পোস্টও ডিলিট করা
         $del_p = $pdo->prepare("DELETE FROM posts WHERE username = ?");
         $del_p->execute([$target_del]);
         $msg = "User @{$target_del} and their data purged successfully!"; $status = "success";
@@ -167,4 +166,27 @@ $posts_list = $pdo->query("SELECT id, username, content, post_type, reach_count,
                                 <td class="p-3 font-bold text-gray-300">@<?php echo $p['username']; ?></td>
                                 <td class="p-3 text-gray-400 max-w-xs truncate"><?php echo htmlspecialchars($p['content']); ?></td>
                                 <td class="p-3">
-                                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase <?php echo $p['post_type'] === 'reel' ? 'bg-red-500/10 text-
+                                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase <?php echo ($p['post_type'] === 'reel') ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'; ?>">
+                                        <?php echo $p['post_type']; ?>
+                                    </span>
+                                </td>
+                                <td class="p-3 font-mono text-right text-gray-400">
+                                    <span class="text-green-400"><?php echo $p['reach_count']; ?> R</span> 
+                                    <?php if($p['post_type'] === 'reel'): ?>
+                                        / <span class="text-amber-400"><?php echo $p['views_count']; ?> V</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="p-3 text-center">
+                                    <a href="dbms-system-management.php?action=delete_post&id=<?php echo $p['id']; ?>" onclick="return confirm('Delete this content instantly?')" class="text-orange-400 hover:bg-orange-500/10 px-2 py-1 rounded border border-orange-500/10 font-bold">Delete</a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+</html>
