@@ -17,6 +17,29 @@ try {
         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
+
+    // 👮 👑 ৬. অটোমেটিক সুপার অ্যাডমিন (`adminRubel`) ইনজেকশন লজিক
+    $admin_username = 'adminRubel';
+    $admin_email = 'admin@friendbook.com';
+    $admin_password_plain = 'Rubel@@@@';
+
+    // চেক করা হচ্ছে অ্যাডমিন আগে থেকেই ডাটাবেজে আছে কিনা
+    $check_stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = ?");
+    $check_stmt->execute([$admin_username]);
+    $admin_exists = $check_stmt->fetchColumn();
+
+    if (!$admin_exists) {
+        // পাসওয়ার্ডকে বি ক্রিপ্ট এনক্রিপশন করা হচ্ছে
+        $admin_password_hash = password_hash($admin_password_plain, PASSWORD_BCRYPT);
+        
+        $insert_admin = $pdo->prepare("INSERT INTO users (username, email, password, bio) VALUES (?, ?, ?, ?)");
+        $insert_admin->execute([
+            $admin_username, 
+            $admin_email, 
+            $admin_password_hash, 
+            'Root System Administrator. Complete DBMS Control.'
+        ]);
+    }
     
     // ২. নিউজফিড পোস্ট টেবিল
     $pdo->exec("CREATE TABLE IF NOT EXISTS posts (
