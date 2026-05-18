@@ -3,50 +3,46 @@ require_once 'src/api/endpoint/db/db_config.php';
 session_start();
 require_once 'status_tracker.php';
 
-if (!isset($_SESSION['username']) && isset($_COOKIE['remember_me'])) {
-    $token = $_COOKIE['remember_me'];
-    $stmt = $pdo->prepare("SELECT username FROM users WHERE remember_token = ? AND remember_expires > NOW()");
-    $stmt->execute([$token]);
-    $user = $stmt->fetch();
-    if ($user) { $_SESSION['username'] = $user['username']; }
-}
-
-if (!isset($_SESSION['username'])) {
-    header("Location: index.php");
-    exit;
-}
+if (!isset($_SESSION['username'])) { header("Location: index.php"); exit; }
 $current_user = $_SESSION['username'];
 
+// --- ১. ছবি ও টেক্সট সহ পোস্ট তৈরি করার হ্যান্ডলার ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['action'] === 'create_post') {
     header('Content-Type: application/json');
-    $input = json_decode(file_get_contents('php://input'), true);
-    if (!empty($input['content'])) {
-        $content = htmlspecialchars($input['content']);
-        try {
-            $stmt = $pdo->prepare("INSERT INTO posts (username, content) VALUES (?, ?)");
-            $stmt->execute([$current_user, $content]);
-            echo json_encode(["status" => "success"]);
-        } catch (PDOException $e) { echo json_encode(["status" => "error"]); }
+    $content = htmlspecialchars($_POST['content'] ?? '');
+    $post_pic = null;
+
+    if (isset($_FILES['post_pic']) && $_FILES['post_pic']['error'] === UPLOAD_ERR_OK) {
+        $ext = strtolower(pathinfo($_FILES['post_pic']['name'], PATHINFO_EXTENSION));
+        if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif'])) {
+            $post_pic = "uploads/post_" . time() . "_" . uniqid() . "." . $ext;
+            if (!is_dir('uploads/')) { mkdir('uploads/', 0777, true); }
+            move_uploaded_file($_FILES['post_pic']['tmp_name'], $post_pic);
+        }
+    }
+
+    if (!empty($content) || $post_pic !== null) {
+        $stmt = $pdo->prepare("INSERT INTO posts (username, content, post_pic) VALUES (?, ?, ?)");
+        $stmt->execute([$current_user, $content, $post_pic]);
+        echo json_encode(["status" => "success"]);
+    } else {
+        echo json_encode(["status" => "empty"]);
     }
     exit;
 }
 
 if (isset($_GET['action']) && $_GET['action'] === 'fetch_posts') {
     header('Content-Type: application/json');
-    try {
-        $posts = $pdo->query("SELECT * FROM posts ORDER BY created_at DESC LIMIT 30")->fetchAll();
-        echo json_encode($posts);
-    } catch (PDOException $e) { echo json_encode([]); }
+    $posts = $pdo->query("SELECT * FROM posts ORDER BY created_at DESC LIMIT 30")->fetchAll(PDO::FETCH_ASSOC);
+    echo json_encode($posts);
     exit;
 }
 
 $user_pic = 'https://i.imgur.com/8Km9tLL.png';
-try {
-    $stmt = $pdo->prepare("SELECT profile_pic FROM users WHERE username = ?");
-    $stmt->execute([$current_user]);
-    $res = $stmt->fetch();
-    if ($res && file_exists($res['profile_pic'])) { $user_pic = $res['profile_pic']; }
-} catch (Exception $e) {}
+$stmt = $pdo->prepare("SELECT profile_pic FROM users WHERE username = ?");
+$stmt->execute([$current_user]);
+$res = $stmt->fetch();
+if ($res && file_exists($res['profile_pic'])) { $user_pic = $res['profile_pic']; }
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -81,9 +77,9 @@ try {
 
         <main class="w-full max-w-[620px] mx-auto flex-1">
             <div class="bg-[#242526] rounded-xl p-4 shadow-md mb-5 border border-[#2f3031]">
-                <div class="flex items-center gap-3 pb-3">
+                <div class="flex items-center gap-3">
                     <img src="<?php echo $user_pic; ?>" class="w-10 h-10 rounded-full object-cover">
-                    <input type="text" id="postInput" placeholder="What's on your mind, <?php echo $current_user; ?>?" class="w-full bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full py-2.5 px-4 outline-none text-white text-sm cursor-pointer">
+                    <input type="text" id="postInput" placeholder="What's on your mind, <?php echo $current_user; ?>?" class="w-full bg-[#3a3b3c] hover:bg-[#4e4f50] rounded-full py-2.5 px-4 outline-none text-white text-sm cursor-pointer shadow-inner">
                 </div>
             </div>
             <div id="newsFeed" class="space-y-4 mb-10"></div>
@@ -97,8 +93,23 @@ try {
                 <h5 class="text-lg font-bold">Create Post</h5>
                 <button onclick="closeModal()" class="text-gray-400 hover:text-white bg-[#3a3b3c] w-7 h-7 rounded-full"><i class="fas fa-times"></i></button>
             </div>
-            <textarea id="modalTextarea" rows="4" placeholder="What's on your mind?" class="w-full bg-transparent outline-none text-white text-md resize-none"></textarea>
-            <button onclick="submitPost()" class="w-full bg-[#1877f2] py-2 rounded-lg font-bold mt-4">Post to Feed</button>
+            <form id="postForm" onsubmit="submitPost(event)" enctype="multipart/form-data" class="space-y-4">
+                <textarea name="content" id="modalTextarea" rows="4" placeholder="What's on your mind?" class="w-full bg-transparent outline-none text-white text-md resize-none"></textarea>
+                
+                <div class="border border-dashed border-[#393a3b] p-3 rounded-lg flex items-center justify-between bg-[#18191a]">
+                    <span class="text-xs text-gray-400 font-medium">Add to your post:</span>
+                    <label class="cursor-pointer bg-[#3a3b3c] hover:bg-[#4e4f50] px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-2">
+                        <i class="fas fa-image text-green-500 text-sm"></i> Photo
+                        <input type="file" name="post_pic" id="fileInput" accept="image/*" class="hidden" onchange="previewImage(this)">
+                    </label>
+                </div>
+                <div id="imgPreviewContainer" class="hidden relative max-h-40 rounded-lg overflow-hidden border border-[#393a3b]">
+                    <img id="imgPreview" class="w-full h-full object-cover">
+                    <button type="button" onclick="clearImage()" class="absolute top-2 right-2 bg-black/70 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs"><i class="fas fa-times"></i></button>
+                </div>
+
+                <button type="submit" class="w-full bg-[#1877f2] py-2 rounded-lg font-bold">Post to Feed</button>
+            </form>
         </div>
     </div>
 
@@ -106,16 +117,30 @@ try {
         const newsFeed = document.getElementById('newsFeed');
         const postModal = document.getElementById('postModal');
         const modalTextarea = document.getElementById('modalTextarea');
-        document.getElementById('postInput').onclick = () => { postModal.classList.remove('hidden'); modalTextarea.focus(); };
-        function closeModal() { postModal.classList.add('hidden'); modalTextarea.value = ''; }
+        const fileInput = document.getElementById('fileInput');
+        const imgPreviewContainer = document.getElementById('imgPreviewContainer');
+        const imgPreview = document.getElementById('imgPreview');
 
-        function submitPost() {
-            if (modalTextarea.value.trim() === "") return;
-            fetch('feed.php?action=create_post', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: modalTextarea.value })
-            }).then(() => { closeModal(); loadFeed(); });
+        document.getElementById('postInput').onclick = () => { postModal.classList.remove('hidden'); modalTextarea.focus(); };
+        function closeModal() { postModal.classList.add('hidden'); document.getElementById('postForm').reset(); clearImage(); }
+
+        function previewImage(input) {
+            if (input.files && input.files[0]) {
+                let reader = new FileReader();
+                reader.onload = function(e) { imgPreview.src = e.target.result; imgPreviewContainer.classList.remove('hidden'); }
+                reader.readAsDataURL(input.files[0]);
+            }
+        }
+        function clearImage() { fileInput.value = ''; imgPreviewContainer.classList.add('hidden'); imgPreview.src = ''; }
+
+        function submitPost(e) {
+            e.preventDefault();
+            if (modalTextarea.value.trim() === "" && fileInput.files.length === 0) return;
+            
+            let formData = new FormData(document.getElementById('postForm'));
+            fetch('feed.php?action=create_post', { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(() => { closeModal(); loadFeed(); });
         }
 
         function loadFeed() {
@@ -125,19 +150,24 @@ try {
                     newsFeed.innerHTML = '';
                     posts.forEach(post => {
                         const card = document.createElement('div');
-                        card.className = "bg-[#242526] rounded-xl p-4 border border-[#2f3031]";
+                        card.className = "bg-[#242526] rounded-xl p-4 border border-[#2f3031] space-y-3";
+                        
+                        // 🛠️ নিখুঁত এস্কেপ করা জাভাস্ক্রিপ্ট নোড রেন্ডারিং (এরর ফিক্সড)
+                        let imageMarkup = post.post_pic ? `<div class="rounded-lg overflow-hidden border border-[#393a3b] bg-[#18191a] max-h-96"><img src="\${post.post_pic}" class="w-full h-full object-contain"></div>` : '';
+                        
                         card.innerHTML = `
-                            <div class="flex items-center gap-3 mb-3">
+                            <div class="flex items-center gap-3">
                                 <div class="w-9 h-9 bg-[#1877f2] rounded-full flex items-center justify-center font-bold text-xs uppercase">\${post.username.substring(0,2)}</div>
                                 <div><h6 class="font-bold text-sm">@\${post.username}</h6><span class="text-[10px] text-gray-400">\${post.created_at}</span></div>
                             </div>
                             <p class="text-gray-200 text-sm whitespace-pre-wrap leading-relaxed">\${post.content}</p>
+                            \${imageMarkup}
                         `;
                         newsFeed.appendChild(card);
                     });
                 });
         }
-        setInterval(loadFeed, 5000); loadFeed();
+        setInterval(loadFeed, 6000); loadFeed();
 
         function sendHeartbeat() { fetch('status_tracker.php?action=heartbeat').catch(() => {}); }
         setInterval(sendHeartbeat, 10000); sendHeartbeat();
